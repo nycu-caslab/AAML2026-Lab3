@@ -19,12 +19,13 @@ wire            in_valid;
 wire [7:0]      M;
 wire [7:0]      N;
 wire            busy;
-wire            A_rd_en;
+wire            A_ram_en;
 wire [15:0]     A_index;
 wire [31:0]     A_data_out;
-wire            B_rd_en;
+wire            B_ram_en;
 wire [15:0]     B_index;
 wire [31:0]     B_data_out;
+wire            C_ram_en;
 wire            C_wr_en;
 wire [15:0]     C_index;
 wire [127:0]    C_data_in;
@@ -49,12 +50,13 @@ PATTERN My_Pattern(
     .M              (M), 
     .N              (N), 
     .busy           (busy),     
-    .A_rd_en        (A_rd_en),
+    .A_ram_en       (A_ram_en),
     .A_index        (A_index),         
     .A_data_out     (A_data_out),         
-    .B_rd_en        (B_rd_en),
+    .B_ram_en       (B_ram_en),
     .B_index        (B_index),         
     .B_data_out     (B_data_out),         
+    .C_ram_en       (C_ram_en),
     .C_wr_en        (C_wr_en),         
     .C_index        (C_index),         
     .C_data_in      (C_data_in),         
@@ -71,12 +73,13 @@ TPU My_TPU(
     .M              (M), 
     .N              (N), 
     .busy           (busy),     
-    .A_rd_en        (A_rd_en),
+    .A_ram_en       (A_ram_en),
     .A_index        (A_index),         
     .A_data_out     (A_data_out),         
-    .B_rd_en        (B_rd_en),
+    .B_ram_en       (B_ram_en),
     .B_index        (B_index),         
     .B_data_out     (B_data_out),         
+    .C_ram_en       (C_ram_en),
     .C_wr_en        (C_wr_en),         
     .C_index        (C_index),         
     .C_data_in      (C_data_in),         

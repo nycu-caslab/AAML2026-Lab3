@@ -8,14 +8,15 @@ module TPU(
     input      [7:0]   N,
     output reg         busy,
 
-    output             A_rd_en,
+    output             A_ram_en,
     output     [15:0]  A_index,
     input      [31:0]  A_data_out,
 
-    output             B_rd_en,
+    output             B_ram_en,
     output     [15:0]  B_index,
     input      [31:0]  B_data_out,
 
+    output             C_ram_en,
     output             C_wr_en,
     output     [15:0]  C_index,
     output     [127:0] C_data_in,

@@ -13,12 +13,13 @@ module PATTERN(
     output reg [7:0]    N,
     input               busy,
 
-    input               A_rd_en,
+    input               A_ram_en,
     input      [15:0]   A_index,
     output     [31:0]   A_data_out,
-    input               B_rd_en,
+    input               B_ram_en,
     input      [15:0]   B_index,
     output     [31:0]   B_data_out,
+    input               C_ram_en,
     input               C_wr_en,
     input      [15:0]   C_index,
     input      [127:0]  C_data_in,
@@ -47,49 +48,54 @@ reg [127:0] GOLDEN [0:65535];
 initial clk = 1'b0;
 always #(`CYCLE_TIME/2.0) clk = ~clk;
 
-input_buffer #(.ADDR_BITS(16)) gbuff_A(
-    .clk(clk), .rst_n(rst_n), .rd_en(A_rd_en), .index(A_index), .data_out(A_data_out)
+global_buffer_bram #(.ADDR_BITS(16), .DATA_BITS(32)) gbuff_A(
+    .clk(clk), .rst_n(rst_n), .ram_en(A_ram_en), .wr_en(1'b0),
+    .index(A_index), .data_in(32'd0), .data_out(A_data_out)
 );
 
-global_buffer #(.ADDR_BITS(16), .DATA_BITS(32)) gbuff_B(
-    .clk(clk), .rst_n(rst_n), .wr_en(1'b0), .rd_en(B_rd_en), .index(B_index),
+global_buffer_bram #(.ADDR_BITS(16), .DATA_BITS(32)) gbuff_B(
+    .clk(clk), .rst_n(rst_n), .ram_en(B_ram_en), .wr_en(1'b0), .index(B_index),
     .data_in(32'd0), .data_out(B_data_out)
 );
 
-global_buffer #(.ADDR_BITS(16), .DATA_BITS(128)) gbuff_C(
-    .clk(clk), .rst_n(rst_n), .wr_en(C_wr_en), .rd_en(1'b0), .index(C_index),
+global_buffer_bram #(.ADDR_BITS(16), .DATA_BITS(128)) gbuff_C(
+    .clk(clk), .rst_n(rst_n), .ram_en(C_ram_en), .wr_en(C_wr_en), .index(C_index),
     .data_in(C_data_in), .data_out(C_data_out)
 );
 
 // Interface safety checks remain active throughout computation.
 always @(negedge clk) begin
     if (rst_n && !busy) begin
-        if (A_rd_en !== 1'b0 || B_rd_en !== 1'b0) begin
-            $display("FAIL: A/B SRAM read while TPU is idle");
+        if (A_ram_en !== 1'b0 || B_ram_en !== 1'b0 || C_ram_en !== 1'b0 || C_wr_en !== 1'b0) begin
+            $display("FAIL: BRAM access while TPU is idle");
             wrong_ans;
         end
     end
     if (rst_n && busy) begin
-        if (A_rd_en && (A_index + 3) >= M_golden * (M_golden + 3)) begin
+        if (A_ram_en && (A_index + 3) >= M_golden * (M_golden + 3)) begin
             $display("FAIL: out-of-range input read A_index=%0d", A_index);
             wrong_ans;
         end
-        if (B_rd_en && B_index >= N_golden * ((N_golden + 3) / 4)) begin
+        if (B_ram_en && B_index >= N_golden * ((N_golden + 3) / 4)) begin
             $display("FAIL: out-of-range weight read B_index=%0d", B_index);
             wrong_ans;
         end
-        if (A_rd_en) begin
+        if (A_ram_en) begin
             a_read_count = a_read_count + 1;
             computation_started = 1;
         end
-        if (B_rd_en) begin
+        if (B_ram_en) begin
             if (computation_started) begin
-                $display("FAIL: B SRAM read after input streaming started");
+                $display("FAIL: B BRAM read after input streaming started");
                 wrong_ans;
             end
             b_read_count = b_read_count + 1;
         end
-        if (C_wr_en) begin
+        if (C_wr_en && !C_ram_en) begin
+            $display("FAIL: C_wr_en asserted without C_ram_en");
+            wrong_ans;
+        end
+        if (C_ram_en && C_wr_en) begin
             if (C_index >= expected_c_words) begin
                 $display("FAIL: out-of-range output write C_index=%0d", C_index);
                 wrong_ans;
@@ -158,12 +164,11 @@ task reset_task; begin
     force clk = 1'b0;
     #(`CYCLE_TIME * 2); rst_n = 1'b0;
     #(`CYCLE_TIME * 2);
-    if (busy !== 1'b0 || C_wr_en !== 1'b0) begin
+    if (busy !== 1'b0 || A_ram_en !== 1'b0 || B_ram_en !== 1'b0 || C_ram_en !== 1'b0 || C_wr_en !== 1'b0) begin
         $display("----------------------------------------------------------------");
         $display("                        Reset failed!                           ");
         $display("         Output signal should be 0 after initial RESET at %8t   ", $time);
         $display("----------------------------------------------------------------");
-        wrong_ans;
     end
     #(`CYCLE_TIME); rst_n = 1'b1;
     release clk;
@@ -192,12 +197,17 @@ end endtask
 
 task read_input_sram; begin
     reg [7:0] value;
+    reg [7:0] input_bytes [0:65535];
     integer bytes;
     integer index;
     bytes = M_golden * (M_golden + 3);
     for (index = 0; index < bytes; index = index + 1) begin
         scan_result = $fscanf(in_fd, "%h", value);
-        gbuff_A.gbuff[index] = value;
+        input_bytes[index] = value;
+    end
+    for (index = 0; index <= bytes - 4; index = index + 1) begin
+        gbuff_A.gbuff[index] = {input_bytes[index], input_bytes[index + 1],
+                                input_bytes[index + 2], input_bytes[index + 3]};
     end
 end endtask
 
