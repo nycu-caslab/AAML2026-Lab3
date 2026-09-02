@@ -18,16 +18,19 @@ module PATTERN #(
     N,
     busy,
 
+    A_ram_en,
     A_wr_en,
     A_index,
     A_data_in,
     A_data_out,
 
+    B_ram_en,
     B_wr_en,
     B_index,
     B_data_in,
     B_data_out,
 
+    C_ram_en,
     C_wr_en,
     C_index,
     C_data_in,
@@ -45,16 +48,19 @@ output reg [7:0]    N;
 input               busy;
 
 
+input               A_ram_en;
 input               A_wr_en;
 input      [15:0]   A_index;
 input      [A_WIDTH*4-1:0] A_data_in;
 output     [A_WIDTH*4-1:0] A_data_out;
 
+input               B_ram_en;
 input               B_wr_en;
 input      [15:0]   B_index;
 input      [B_WIDTH*4-1:0] B_data_in;
 output     [B_WIDTH*4-1:0] B_data_out;
 
+input               C_ram_en;
 input               C_wr_en;
 input      [15:0]   C_index;
 input      [127:0]  C_data_in;
@@ -92,25 +98,27 @@ always #(CYCLE/2.0) clk = ~clk;
 
 
 
-global_buffer #(
+global_buffer_bram #(
     .ADDR_BITS(16),
     .DATA_BITS(A_WIDTH*4)
 )
 gbuff_A(
     .clk(clk),
     .rst_n(rst_n),
+    .ram_en(A_ram_en),
     .wr_en(A_wr_en),
     .index(A_index),
     .data_in(A_data_in),
     .data_out(A_data_out)
 );
 
-global_buffer #(
+global_buffer_bram #(
     .ADDR_BITS(16),
     .DATA_BITS(B_WIDTH*4)
 ) gbuff_B(
     .clk(clk),
     .rst_n(rst_n),
+    .ram_en(B_ram_en),
     .wr_en(B_wr_en),
     .index(B_index),
     .data_in(B_data_in),
@@ -118,12 +126,13 @@ global_buffer #(
 );
 
 
-global_buffer #(
+global_buffer_bram #(
     .ADDR_BITS(16),
     .DATA_BITS(128)
 ) gbuff_C(
     .clk(clk),
     .rst_n(rst_n),
+    .ram_en(C_ram_en),
     .wr_en(C_wr_en),
     .index(C_index),
     .data_in(C_data_in),

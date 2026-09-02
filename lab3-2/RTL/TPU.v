@@ -12,16 +12,19 @@ module TPU #(
     input      [7:0]       N,
     output reg             busy,
 
+    output                 A_ram_en,
     output                 A_wr_en,
     output     [15:0]      A_index,
     output     [A_WIDTH*4-1:0] A_data_in,
     input      [A_WIDTH*4-1:0] A_data_out,
 
+    output                 B_ram_en,
     output                 B_wr_en,
     output     [15:0]      B_index,
     output     [B_WIDTH*4-1:0] B_data_in,
     input      [B_WIDTH*4-1:0] B_data_out,
 
+    output                 C_ram_en,
     output                 C_wr_en,
     output     [15:0]      C_index,
     output     [127:0]     C_data_in,
