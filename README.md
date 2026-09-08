@@ -5,6 +5,7 @@
 
 
 ## Directory Structure
+
 ```bash
 .
 ├── README.md
@@ -20,17 +21,35 @@
 │       ├── PATTERN.v
 │       └── TESTBENCH.v
 └── lab3-2
+    ├── BOARD
+    │   ├── reference_gemm
+    │   │   ├── constraints
+    │   │   │   └── arty_a7_100t.xdc
+    │   │   ├── ip
+    │   │   └── rtl
+    │   │       ├── PE.v
+    │   │       ├── TPU.v
+    │   │       ├── TPU_top.v
+    │   │       ├── uart_controller.v
+    │   │       ├── uart_rx.v
+    │   │       └── uart_tx.v
+    │   └── scripts
+    │       ├── create_board_project.tcl
+    │       ├── build_bitstream.tcl
+    │       └── program_fpga.tcl
+    ├── HOST
+    │   └── uart_test.py
+    ├── RTL
+    │   ├── global_buffer.v
+    │   └── TPU.v
+    ├── TESTBENCH
+    │   ├── PATTERN.v
+    │   └── TESTBENCH.v
     ├── data_generator.py
     ├── Makefile
     ├── Makefile_ncverilog
     ├── Makefile_vcs
-    ├── requirements.txt
-    ├── RTL
-    │   ├── global_buffer.v
-    │   └── TPU.v
-    └── TESTBENCH
-        ├── PATTERN.v
-        └── TESTBENCH.v
+    └── requirements.txt
 ```
 
 - `lab3-1`: Row-stationary 2D convolution design problem.
@@ -41,7 +60,7 @@
 - `dump.(vcd|fsdb)`: The waveform after running any test.
 
 ## Makefile
-Run the Makefile commands inside `lab3-1` or `lab3-2`.
+Run the Makefile commands inside `lab3-1` or `lab3-2` for Software Simulation.
 
 - `make verif1`
     - Run the code with #1 test case.
@@ -51,3 +70,102 @@ Run the Makefile commands inside `lab3-1` or `lab3-2`.
     - Run the code with #3 test case.
 - `make verif4`
     - Run the code with #4 test case.
+
+## Arty A7-100T FPGA Verification
+
+Run the following commands inside the `lab3-2` directory.
+
+### Hardware RTL
+
+The RTL used for FPGA hardware verification is different from the RTL used for simulation.
+
+You are only allowed to modify the following RTL files:
+
+```text
+BOARD/reference_gemm/rtl/TPU.v
+BOARD/reference_gemm/rtl/PE.v
+```
+
+Four test cases are provided to help you verify the correctness of your design. During grading, the TAs will evaluate your GEMV design on the FPGA using different test cases. The grading results will be based on FPGA execution rather than the provided simulation results. Modifying any other files related to FPGA hardware verification will result in a score of zero for the GEMV assignment.
+
+### Prepare the FPGA Board Files
+
+The following command prepares the Vivado board files from the RTL, IP, and XDC files:
+
+```bash
+make fpga_board_files
+```
+
+You normally do not need to run this command separately because it is automatically executed by `make generate_gemv_bitstream`.
+
+### Generate the Bitstream
+
+After modifying `TPU.v` or `PE.v`, run:
+
+```bash
+make generate_gemv_bitstream
+```
+
+This command automatically prepares the FPGA board files, generates the required IP output products, runs synthesis and implementation, and generates:
+
+```text
+build/bitstream/gemv_board.bit
+```
+
+The FPGA is not programmed automatically by this command.
+
+### Program the FPGA
+
+Program the Arty A7-100T using the existing bitstream:
+
+```bash
+make program
+```
+
+This command does not rerun synthesis or implementation.
+
+### Run Hardware Verification
+
+After programming the FPGA, run:
+
+```bash
+make hardware_verify
+```
+For each test case, follow these steps:
+
+1. Press BTN1 on the FPGA board to enter UART data-loading mode.
+2. Press Enter on the keyboard when prompted.
+
+The Python program will transmit the input matrix and vector to the FPGA through UART and start the GEMV computation. After the computation is complete, the FPGA will return the output vector to the Python program through UART for verification.
+
+If automatic UART detection fails, specify the UART port manually:
+
+```bash
+make hardware_verify UART_PORT=/dev/ttyUSB1
+```
+
+Use the following command to find the correct UART port:
+
+```bash
+python3 -m serial.tools.list_ports -v
+```
+
+### Complete Hardware Flow
+
+```bash
+make generate_gemv_bitstream
+make program
+make hardware_verify
+```
+
+### Clean FPGA Build Files
+
+```bash
+make fpga_clean
+```
+
+To clean both simulation and FPGA-generated files:
+
+```bash
+make clean_all
+```

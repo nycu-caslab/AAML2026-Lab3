@@ -25,3 +25,28 @@ verif3
 verif4
 env.sh
 .venv/
+
+
+# Vivado session files
+vivado*.jou
+vivado*.log
+vivado*.str
+vivado*.pb
+webtalk*.jou
+webtalk*.log
+hs_err_pid*.log
+
+# Vivado generated directories
+.Xil/
+*.cache/
+*.gen/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+build_unc_backup/
+
+# Python generated files
+__pycache__/
+*.pyc
+*.py[cod]
