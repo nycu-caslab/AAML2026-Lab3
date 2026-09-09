@@ -45,7 +45,7 @@ def pack_int8(value):
     return struct.pack("b", int(value))
 
 
-def hardware_gemm_golden(a_matrix, b_matrix):
+def hardware_gemv_golden(a_matrix, b_matrix):
     """Exact INT8 x INT8 dot products, accumulated as signed INT32.
 
     K <= 255 bounds the largest magnitude to 4,177,920, so no overflow occurs.
@@ -280,7 +280,7 @@ def print_matrix_preview(name, matrix, rows=4, columns=8):
     print()
 
 
-def run_gemm_test(
+def run_gemv_test(
     port_name,
     a_matrix,
     b_matrix,
@@ -297,7 +297,7 @@ def run_gemm_test(
     a_words, b_words, c_words = bram_word_counts(m_value, k_value, n_value)
 
     print("Computing exact INT8 / INT32 Golden result...")
-    golden_matrix = hardware_gemm_golden(a_matrix, b_matrix)
+    golden_matrix = hardware_gemv_golden(a_matrix, b_matrix)
 
     print("=" * 72)
     print(f"{test_name}: TPU UART INT8 GEMV test")
@@ -386,7 +386,7 @@ def run_gemm_test(
             print(f"  C[{row}][{column}]: FPGA={actual}, Golden={expected}")
         return False
 
-    # print("PASS: UART -> BRAM -> TPU -> BRAM -> UART random GEMM passed.")
+    # print("PASS: UART -> BRAM -> TPU -> BRAM -> UART random GEMV passed.")
     print("==============================================================")
     print("**                                                          **")
     print("**                                                          **")
@@ -466,7 +466,7 @@ def main():
         )
 
         test_name = f"Case {case_index} ({m_value}x{k_value} matrix, {k_value}x1 vector)"
-        success = run_gemm_test(
+        success = run_gemv_test(
             port_name,
             a_matrix,
             b_matrix,

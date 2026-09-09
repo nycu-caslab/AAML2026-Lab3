@@ -1,4 +1,4 @@
-# Program the Arty A7-100T with the generated GEMM/GEMV bitstream.
+# Program the Arty A7-100T with the generated GEMV bitstream.
 
 set script_dir [file dirname [file normalize [info script]]]
 set project_root [file normalize [file join $script_dir ../..]]

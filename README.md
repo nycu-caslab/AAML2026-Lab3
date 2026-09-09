@@ -1,5 +1,4 @@
-# AAML2026_lab3_design
-## TODO
+# AAML2026 lab3
 
 [Lab introduction of Lab3](https://nycu-caslab.github.io/AAML2026/labs/lab_3.html)
 
@@ -22,7 +21,7 @@
 │       └── TESTBENCH.v
 └── lab3-2
     ├── BOARD
-    │   ├── reference_gemm
+    │   ├── reference
     │   │   ├── constraints
     │   │   │   └── arty_a7_100t.xdc
     │   │   ├── ip
@@ -39,28 +38,20 @@
     │       └── program_fpga.tcl
     ├── HOST
     │   └── uart_test.py
-    ├── RTL
-    │   ├── global_buffer.v
-    │   └── TPU.v
-    ├── TESTBENCH
-    │   ├── PATTERN.v
-    │   └── TESTBENCH.v
-    ├── data_generator.py
     ├── Makefile
-    ├── Makefile_ncverilog
-    ├── Makefile_vcs
     └── requirements.txt
 ```
 
 - `lab3-1`: Row-stationary 2D convolution design problem.
-- `lab3-2`: GEMM design problem.
-- `RTL`: The source code of your design.
-- `TESTBENCH`: The testbench to test your design.
-- `data_generator.py`: The generator to generate test cases.
-- `dump.(vcd|fsdb)`: The waveform after running any test.
+- `lab3-2`: GEMV design problem.
+- `lab3-1/RTL`: The source code for the Lab 3-1 simulation design.
+- `lab3-1/TESTBENCH`: The testbench for Lab 3-1.
+- `lab3-1/data_generator.py`: The test case generator for Lab 3-1.
+- `lab3-2/BOARD/reference/rtl`: The RTL source directory for Lab 3-2 FPGA verification.
 
-## Makefile
-Run the Makefile commands inside `lab3-1` or `lab3-2` for Software Simulation.
+## Lab 3-1 Software Simulation
+
+Run the following Makefile commands inside `lab3-1` for software simulation.
 
 - `make verif1`
     - Run the code with #1 test case.
@@ -71,19 +62,21 @@ Run the Makefile commands inside `lab3-1` or `lab3-2` for Software Simulation.
 - `make verif4`
     - Run the code with #4 test case.
 
-## Arty A7-100T FPGA Verification
+Lab 3-2 does not use `make verif1`, `make verif2`, `make verif3`, or `make verif4`.
+
+## Lab 3-2 Arty A7-100T FPGA Verification
 
 Run the following commands inside the `lab3-2` directory.
 
 ### Hardware RTL
 
-The RTL used for FPGA hardware verification is different from the RTL used for simulation.
+The RTL used for FPGA hardware verification is located under `BOARD/reference/rtl`.
 
 You are only allowed to modify the following RTL files:
 
 ```text
-BOARD/reference_gemm/rtl/TPU.v
-BOARD/reference_gemm/rtl/PE.v
+BOARD/reference/rtl/TPU.v
+BOARD/reference/rtl/PE.v
 ```
 
 Four test cases are provided to help you verify the correctness of your design. During grading, the TAs will evaluate your GEMV design on the FPGA using different test cases. The grading results will be based on FPGA execution rather than the provided simulation results. Modifying any other files related to FPGA hardware verification will result in a score of zero for the GEMV assignment.

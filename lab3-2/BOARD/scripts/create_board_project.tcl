@@ -1,9 +1,9 @@
-# Portable Arty A7-100T GEMM/GEMV board project creation script.
+# Portable Arty A7-100T GEMV board project creation script.
 
 set script_dir [file dirname [file normalize [info script]]]
 set project_root [file normalize [file join $script_dir ../..]]
 
-set reference_dir [file join $project_root BOARD reference_gemm]
+set reference_dir [file join $project_root BOARD reference]
 set rtl_dir       [file join $reference_dir rtl]
 set ip_dir        [file join $reference_dir ip]
 set xdc_file      [file join $reference_dir constraints arty_a7_100t.xdc]
@@ -19,7 +19,7 @@ file mkdir $build_dir
 file mkdir $report_dir
 
 puts "============================================================"
-puts "Creating Arty A7-100T GEMM/GEMV board project"
+puts "Creating Arty A7-100T GEMV board project"
 puts "Project root : $project_root"
 puts "Build dir    : $build_dir"
 puts "RTL dir      : $rtl_dir"

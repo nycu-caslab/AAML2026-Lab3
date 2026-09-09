@@ -1,4 +1,4 @@
-# Build the Arty A7-100T GEMM/GEMV FPGA bitstream.
+# Build the Arty A7-100T GEMV FPGA bitstream.
 #
 # Usage:
 #   vivado -mode batch \
