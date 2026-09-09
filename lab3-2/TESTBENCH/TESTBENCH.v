@@ -13,7 +13,7 @@
 module TESTBENCH;
 
 
-localparam A_WIDTH = 4;
+localparam A_WIDTH = 8;
 localparam B_WIDTH = 8;
 
 //* CHIP io wires

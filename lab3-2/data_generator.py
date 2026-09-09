@@ -28,7 +28,7 @@ def write_matrix(fd, m):
 
     calign = int((c+3)/4)*4
 
-    malign = np.zeros((r, calign), dtype=np.uint8)
+    malign = np.zeros((r, calign), dtype=np.int8)
 
     malign[:, 0:c] = m
     cptr = 0
@@ -38,7 +38,7 @@ def write_matrix(fd, m):
         for dr in range(r):
             for n in range(4):
                 # t = f"{malign[dr, cptr+n]}"
-                fd.write("{0:2x} ".format(malign[dr, cptr+n]))
+                fd.write("{0:02x} ".format(int(malign[dr, cptr+n]) & 0xFF))
             fd.write('\n')
             
 
@@ -85,7 +85,7 @@ def write_config(fd, K, M, N):
     fd.write("{0:3x} {1:3x} {2:3x}".format( K, M, N))
 
 
-def gen_one_case(i, in_fd=None, c_fd=None, all_one=False, mode=0, shape_range=(4, 255), a_val_range=(0, 16), x_val_range=(0, 255)):
+def gen_one_case(i, in_fd=None, c_fd=None, all_one=False, mode=0, shape_range=(4, 255), a_val_range=(-128, 128), x_val_range=(-128, 128)):
 
     if in_fd == None:
         print("input file descriptor is null")
@@ -114,13 +114,13 @@ def gen_one_case(i, in_fd=None, c_fd=None, all_one=False, mode=0, shape_range=(4
     #* generate the matrix and vector
 
     if all_one:
-        Am = np.ones((M, K), dtype=np.uint8)
-        Bv = np.ones((K,), dtype=np.uint8)
+        Am = np.ones((M, K), dtype=np.int8)
+        Bv = np.ones((K,), dtype=np.int8)
     else:
-        Am = np.random.randint(a_val_range[0], high=a_val_range[1], size=(M, K), dtype=np.uint8)
-        Bv = np.random.randint(x_val_range[0], high=x_val_range[1], size=(K,), dtype=np.uint8)
+        Am = np.random.randint(a_val_range[0], high=a_val_range[1], size=(M, K), dtype=np.int8)
+        Bv = np.random.randint(x_val_range[0], high=x_val_range[1], size=(K,), dtype=np.int8)
 
-    Cv = np.matmul(Am, Bv, dtype=np.uint32)
+    Cv = np.matmul(Am, Bv, dtype=np.int32)
     AmT = Am.transpose()
 
     # print(K, M, N)
@@ -177,7 +177,7 @@ def main():
     in_fd.write(f"{ncases:d}")
 
     for n in range(ncases):
-        gen_one_case(n, in_fd, legible_fd, all_one=all_one, mode=mode, shape_range=(4, 127), a_val_range=(0, 16), x_val_range=(0, 255))
+        gen_one_case(n, in_fd, legible_fd, all_one=all_one, mode=mode, shape_range=(4, 127), a_val_range=(-128, 128), x_val_range=(-128, 128))
 
 
 
@@ -186,8 +186,6 @@ if __name__ == "__main__":
 
     
     
-
-
 
 
 

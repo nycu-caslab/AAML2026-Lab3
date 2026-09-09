@@ -1,9 +1,7 @@
 module TPU_top #(
     parameter memory_depth = 1024,
-    parameter memory_bits = $clog2(memory_depth),
-    parameter multiplication_cycle = 15,
+    parameter memory_bits = 16,
     parameter bram_latency_cycle = 1,
-    parameter PE_size = 4,
     parameter CLK_FREQ_HZ     = 50_000_000, // For Uart
     parameter UART_BAUD_RATE  = 115_200
 )(
@@ -28,7 +26,6 @@ localparam [2:0] S_SEND_UART = 3'd3;
 localparam [2:0] S_DONE      = 3'd4;
 localparam [2:0] S_CLEAR_C   = 3'd5;
 
-localparam [31:0] BRAM_VALID_DELAY = (bram_latency_cycle > 0) ? (bram_latency_cycle - 1) : 0;
 //
 // Board signal aliases
 //
@@ -70,6 +67,7 @@ wire       busy;
 wire       tpu_rst_n;
 reg        done;
 reg [2:0] top_state;
+reg [31:0] run_cycle_count;
 
 //
 // Connect TPU/check status to physical LEDs
@@ -99,16 +97,19 @@ wire [7:0] uart_N_value;
 ///
 
 wire           A_wr_en;
+wire           A_ram_en;
 wire [memory_bits-1:0]    A_index;
-wire [127:0]   A_data_in;
-wire [127:0]   A_data_out;
+wire [31:0]   A_data_in;
+wire [31:0]   A_data_out;
 
 wire           B_wr_en;
+wire           B_ram_en;
 wire [memory_bits-1:0]    B_index;
-wire [127:0]   B_data_in;
-wire [127:0]   B_data_out;
+wire [31:0]   B_data_in;
+wire [31:0]   B_data_out;
 
 wire           C_wr_en;
+wire           C_ram_en;
 wire [memory_bits-1:0]    C_index;
 wire [127:0]   C_data_in;
 wire [127:0]   C_data_out;
@@ -120,13 +121,6 @@ wire                  bram_C_wr_en;
 wire [memory_bits-1:0] bram_C_write_index;
 wire [127:0]          bram_C_data_in;
 
-// for BRAM data control
-wire bram_data_enable;
-reg [memory_bits-1:0] prev_A_idx;
-reg [memory_bits-1:0] prev_B_idx;
-reg [31:0] bram_read_latency_count;
-wire bram_read_index_stable;
-
 // Bram store the initial data
 // read, 1 cycle latency
 // write, the writed result be seen in the next cycle
@@ -137,11 +131,11 @@ wire bram_read_index_stable;
 //
 wire                       uart_A_wr_en;
 wire [memory_bits-1:0]     uart_A_index;
-wire [127:0]               uart_A_data_in;
+wire [31:0]               uart_A_data_in;
 
 wire                       uart_B_wr_en;
 wire [memory_bits-1:0]     uart_B_index;
-wire [127:0]               uart_B_data_in;
+wire [31:0]               uart_B_data_in;
 //
 // UART C BRAM read interface
 //
@@ -149,7 +143,7 @@ wire [memory_bits-1:0] uart_C_index;
 wire [127:0]           uart_C_data_out;
 
 
-bram_A u_bram_A (
+board_bram #(.DATA_WIDTH(32), .DEPTH(memory_depth)) u_bram_A (
     .clka  (clk),
     .ena   (1'b1),
     .wea   (uart_A_wr_en),
@@ -157,12 +151,12 @@ bram_A u_bram_A (
     .dina  (uart_A_data_in),
 
     .clkb  (clk),
-    .enb   (1'b1),
+    .enb   (A_ram_en),
     .addrb (A_index[memory_bits-1:0]),
     .doutb (A_data_out)
 );
 
-bram_B u_bram_B (
+board_bram #(.DATA_WIDTH(32), .DEPTH(memory_depth)) u_bram_B (
     // Port A: UART writes B
     .clka  (clk),
     .ena   (1'b1),
@@ -172,7 +166,7 @@ bram_B u_bram_B (
 
     // Port B: TPU reads B
     .clkb  (clk),
-    .enb   (1'b1),
+    .enb   (B_ram_en),
     .addrb (B_index),
     .doutb (B_data_out)
 );
@@ -184,10 +178,10 @@ assign bram_C_write_index = clear_C_active ? clear_C_index : C_index[memory_bits
 assign bram_C_data_in = clear_C_active ? 128'd0 : C_data_in;
 assign tpu_rst_n = rst_n & ~clear_C_active;
 
-bram_C u_bram_C (
+board_bram #(.DATA_WIDTH(128), .DEPTH(memory_depth)) u_bram_C (
     // Port A: TPU writes C
     .clka  (clk),
-    .ena   (1'b1),
+    .ena   (clear_C_active || C_ram_en),
     .wea   (bram_C_wr_en),
     .addra (bram_C_write_index),
     .dina  (bram_C_data_in),
@@ -273,33 +267,9 @@ uart_controller #(
     .C_data_out   (uart_C_data_out),
 
     // Transmission status
-    .send_done    (uart_send_done)
+    .send_done    (uart_send_done),
+    .execution_cycles (run_cycle_count)
 );
-
-// deal with the latency of bram
-always @(posedge clk or negedge rst_n)begin
-    if(!rst_n)begin
-        prev_A_idx <= 0;
-        prev_B_idx <= 0;
-        bram_read_latency_count <= 32'd0;
-    end
-    else begin
-        if((prev_A_idx != A_index) || (prev_B_idx != B_index)) begin
-            prev_A_idx <= A_index;
-            prev_B_idx <= B_index;
-            bram_read_latency_count <= 32'd0;
-        end
-        else if(bram_read_latency_count < BRAM_VALID_DELAY) begin
-            bram_read_latency_count <= bram_read_latency_count + 1'b1;
-        end
-        else begin
-            bram_read_latency_count <= bram_read_latency_count;
-        end
-    end
-end
-assign bram_read_index_stable = (prev_A_idx == A_index) && (prev_B_idx == B_index);
-assign bram_data_enable = bram_read_index_stable && (bram_read_latency_count >= BRAM_VALID_DELAY);
-
 
 assign start_pulse = start_sync1 & ~start_sync1_d;
 
@@ -343,6 +313,7 @@ always @(posedge clk or negedge rst_n) begin
         in_valid  <= 1'b0;
         busy_seen <= 1'b0;
         done      <= 1'b0;
+        run_cycle_count <= 32'd0;
         clear_C_index <= {memory_bits{1'b0}};
         clear_C_then_wait_uart <= 1'b0;
     end
@@ -354,6 +325,7 @@ always @(posedge clk or negedge rst_n) begin
                 done      <= 1'b0;
                 busy_seen <= 1'b0;
                 in_valid  <= 1'b0;
+                run_cycle_count <= 32'd0;
                 clear_C_index <= {memory_bits{1'b0}};
                 if (start_pulse) begin
                     clear_C_then_wait_uart <= 1'b1;
@@ -363,6 +335,7 @@ always @(posedge clk or negedge rst_n) begin
             S_WAIT_UART: begin
                 done      <= 1'b0;
                 busy_seen <= 1'b0;
+                run_cycle_count <= 32'd0;
                 if (uart_load_done) begin
                     in_valid  <= 1'b1;
                     top_state <= S_RUN;
@@ -374,6 +347,7 @@ always @(posedge clk or negedge rst_n) begin
 
             S_RUN: begin
                 in_valid <= 1'b0;
+                run_cycle_count <= run_cycle_count + 32'd1;
                 if (busy) begin
                     // TPU is running.
                     busy_seen <= 1'b1;
@@ -409,6 +383,7 @@ always @(posedge clk or negedge rst_n) begin
                 in_valid  <= 1'b0;
                 done      <= 1'b0;
                 busy_seen <= 1'b0;
+                run_cycle_count <= 32'd0;
                 if (clear_C_index == (memory_depth - 1)) begin
                     clear_C_index <= {memory_bits{1'b0}};
                     if (clear_C_then_wait_uart) begin
@@ -440,6 +415,7 @@ always @(posedge clk or negedge rst_n) begin
                 in_valid  <= 1'b0;
                 busy_seen <= 1'b0;
                 done      <= 1'b0;
+                run_cycle_count <= 32'd0;
                 clear_C_then_wait_uart <= 1'b0;
             end
 
@@ -450,31 +426,31 @@ end
 // TPU core
 //
 TPU #(
-    .multiplication_cycle(multiplication_cycle),
-    .memory_depth(memory_depth),
-    .memory_bits(memory_bits),
-    .bram_latency_cycle(bram_latency_cycle),
-    .PE_size(PE_size)
-)u_tpu(
+    .A_WIDTH(8),
+    .B_WIDTH(8),
+    .PSUM_WIDTH(32)
+) u_tpu(
     .clk        (clk),
     .rst_n      (tpu_rst_n),
     .in_valid   (in_valid),
-    .bram_data_enable (bram_data_enable),
     .K          (K_value),
     .M          (M_value),
     .N          (N_value),
     .busy       (busy),
 
+    .A_ram_en   (A_ram_en),
     .A_wr_en    (A_wr_en),
     .A_index    (A_index),
     .A_data_in  (A_data_in),
     .A_data_out (A_data_out),
 
+    .B_ram_en   (B_ram_en),
     .B_wr_en    (B_wr_en),
     .B_index    (B_index),
     .B_data_in  (B_data_in),
     .B_data_out (B_data_out),
 
+    .C_ram_en   (C_ram_en),
     .C_wr_en    (C_wr_en),
     .C_index    (C_index),
     .C_data_in  (C_data_in),

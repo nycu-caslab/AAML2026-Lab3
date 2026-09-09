@@ -1,5 +1,6 @@
 import argparse
 import math
+from numbers import Integral
 import random
 import secrets
 import struct
@@ -20,18 +21,15 @@ FPGA_PID = 0x6010
 
 # These values must match TPU_top and uart_controller.
 MEMORY_DEPTH = 1024
+A_LANES_PER_WORD = 4
 LANES_PER_WORD = 4
-MIN_MATRIX_DIMENSION = 2
+MIN_MATRIX_DIMENSION = 1
 MIN_VECTOR_DIMENSION = 1
-MAX_DIMENSION = 254
+MAX_DIMENSION = 255
 
-# Modest finite values exercise FP32 rounding without generating NaN, infinity,
-# overflow, or subnormal corner cases.
-RANDOM_VALUE_MIN = -4.0
-RANDOM_VALUE_MAX = 4.0
-
-# Permit a difference in the last one or two FP32 representation steps.
-DEFAULT_MAX_ULP = 2
+# Signed INT8 inputs; exact signed INT32 output comparison.
+RANDOM_VALUE_MIN = -128
+RANDOM_VALUE_MAX = 127
 
 FIXED_GEMV_CASES = (
     (4, 4, 1),
@@ -41,156 +39,27 @@ FIXED_GEMV_CASES = (
 )
 
 
-def float32_to_bits(value):
-    return struct.unpack("<I", struct.pack("<f", float(value)))[0]
+def pack_int8(value):
+    if not isinstance(value, Integral) or not -128 <= value <= 127:
+        raise ValueError(f"Expected signed INT8 (-128..127), received {value!r}")
+    return struct.pack("b", int(value))
 
 
-def bits_to_float32(bits):
-    return struct.unpack("<f", struct.pack("<I", bits & 0xFFFFFFFF))[0]
+def hardware_gemm_golden(a_matrix, b_matrix):
+    """Exact INT8 x INT8 dot products, accumulated as signed INT32.
 
-
-def to_float32(value):
-    return bits_to_float32(float32_to_bits(value))
-
-
-def pack_fp32(value):
-    return struct.pack("<I", float32_to_bits(value))
-
-
-def round_right_shift_to_even(value, shift):
-    """Round a nonnegative integer right shift using nearest, ties to even."""
-    if shift <= 0:
-        return value << (-shift)
-
-    quotient, remainder = divmod(value, 1 << shift)
-    halfway = 1 << (shift - 1)
-
-    if remainder > halfway:
-        quotient += 1
-    elif remainder == halfway and (quotient & 1):
-        quotient += 1
-
-    return quotient
-
-
-def decode_finite_fp32(bits):
-    """Return (signed significand, exponent) for value = sig * 2**exp."""
-    sign = -1 if (bits & 0x80000000) else 1
-    exponent_field = (bits >> 23) & 0xFF
-    fraction = bits & 0x7FFFFF
-
-    if exponent_field == 0xFF:
-        raise ValueError("NaN and infinity are not supported by this test")
-
-    if exponent_field == 0:
-        significand = fraction
-        exponent = -149
-    else:
-        significand = (1 << 23) | fraction
-        exponent = exponent_field - 127 - 23
-
-    return sign * significand, exponent
-
-
-def exact_binary_to_fp32_bits(signed_integer, binary_exponent):
-    """Round signed_integer * 2**binary_exponent to IEEE-754 binary32."""
-    if signed_integer == 0:
-        return 0x00000000
-
-    sign_bit = 0x80000000 if signed_integer < 0 else 0
-    magnitude = abs(signed_integer)
-    highest_bit = magnitude.bit_length() - 1
-    unbiased_exponent = highest_bit + binary_exponent
-
-    if unbiased_exponent > 127:
-        return sign_bit | 0x7F800000
-
-    if unbiased_exponent >= -126:
-        shift = highest_bit - 23
-        significand = round_right_shift_to_even(magnitude, shift)
-
-        if significand >= (1 << 24):
-            significand >>= 1
-            unbiased_exponent += 1
-            if unbiased_exponent > 127:
-                return sign_bit | 0x7F800000
-
-        exponent_field = unbiased_exponent + 127
-        fraction = significand - (1 << 23)
-        return sign_bit | (exponent_field << 23) | (fraction & 0x7FFFFF)
-
-    # Subnormal result uses units of 2^-149.
-    shift = -(binary_exponent + 149)
-    fraction = round_right_shift_to_even(magnitude, shift)
-
-    if fraction == 0:
-        return sign_bit
-    if fraction >= (1 << 23):
-        return sign_bit | (1 << 23)
-    return sign_bit | fraction
-
-
-def fp32_fma_bits(a_bits, b_bits, c_bits):
+    K <= 255 bounds the largest magnitude to 4,177,920, so no overflow occurs.
     """
-    Bit-level emulation of one PE operation: round_fp32(a*b + c).
-
-    Golden generation does not use Python floating-point multiplication or
-    addition. It uses exact integer operations on IEEE-754 significands and
-    performs one round-to-nearest-even conversion, like a fused FP32 FMA.
-    """
-    a_significand, a_exponent = decode_finite_fp32(a_bits)
-    b_significand, b_exponent = decode_finite_fp32(b_bits)
-    c_significand, c_exponent = decode_finite_fp32(c_bits)
-
-    product_significand = a_significand * b_significand
-    product_exponent = a_exponent + b_exponent
-
-    if product_significand == 0:
-        return c_bits
-    if c_significand == 0:
-        return exact_binary_to_fp32_bits(product_significand, product_exponent)
-
-    common_exponent = min(product_exponent, c_exponent)
-    exact_sum = (
-        (product_significand << (product_exponent - common_exponent))
-        + (c_significand << (c_exponent - common_exponent))
-    )
-    return exact_binary_to_fp32_bits(exact_sum, common_exponent)
-
-
-def hardware_gemm_golden_bits(a_matrix, b_matrix):
-    """Emulate every PE's K-ordered FP32 FMA accumulation."""
-    m_value = len(a_matrix)
-    k_value = len(a_matrix[0])
-    n_value = len(b_matrix[0])
-
-    a_bits = [[float32_to_bits(value) for value in row] for row in a_matrix]
-    b_bits = [[float32_to_bits(value) for value in row] for row in b_matrix]
-    result_bits = [
-        [0x00000000 for _ in range(n_value)]
-        for _ in range(m_value)
+    m_value, k_value, n_value = check_dimensions(a_matrix, b_matrix)
+    return [
+        [sum(int(a_matrix[row][k]) * int(b_matrix[k][column])
+             for k in range(k_value)) for column in range(n_value)]
+        for row in range(m_value)
     ]
-
-    for row in range(m_value):
-        for column in range(n_value):
-            accumulator_bits = 0x00000000
-            for k_index in range(k_value):
-                accumulator_bits = fp32_fma_bits(
-                    a_bits[row][k_index],
-                    b_bits[k_index][column],
-                    accumulator_bits,
-                )
-            result_bits[row][column] = accumulator_bits
-
-    return result_bits
-
-
-def bits_matrix_to_float(matrix_bits):
-    return [[bits_to_float32(bits) for bits in row] for row in matrix_bits]
 
 
 def bram_word_counts(m_value, k_value, n_value):
-    a_word_count = math.ceil(m_value / LANES_PER_WORD) * k_value
+    a_word_count = math.ceil(m_value / A_LANES_PER_WORD) * k_value
     b_word_count = math.ceil(n_value / LANES_PER_WORD) * k_value
     c_word_count = math.ceil(n_value / LANES_PER_WORD) * m_value
     return a_word_count, b_word_count, c_word_count
@@ -200,7 +69,7 @@ def dimensions_fit_hardware(m_value, k_value, n_value):
     if not (
         MIN_MATRIX_DIMENSION <= m_value <= MAX_DIMENSION
         and MIN_MATRIX_DIMENSION <= k_value <= MAX_DIMENSION
-        and MIN_VECTOR_DIMENSION <= n_value <= MAX_DIMENSION
+        and n_value == 1
     ):
         return False
     return max(bram_word_counts(m_value, k_value, n_value)) <= MEMORY_DEPTH
@@ -211,9 +80,7 @@ def generate_random_matrix(generator, rows, columns, minimum, maximum):
     for _ in range(rows):
         matrix_row = []
         for _ in range(columns):
-            # Quantize now so FPGA input, displayed input, and Golden all use
-            # exactly the same transmitted binary32 value.
-            matrix_row.append(to_float32(generator.uniform(minimum, maximum)))
+            matrix_row.append(generator.randint(minimum, maximum))
         matrix.append(matrix_row)
     return matrix
 
@@ -280,6 +147,9 @@ def validate_matrix(matrix, name):
     column_count = len(matrix[0])
     if any(len(row) != column_count for row in matrix):
         raise ValueError(f"{name} must be rectangular")
+    for row in matrix:
+        for value in row:
+            pack_int8(value)
 
 
 def check_dimensions(a_matrix, b_matrix):
@@ -296,6 +166,8 @@ def check_dimensions(a_matrix, b_matrix):
             f"but B is {b_rows}x{n_value}"
         )
 
+    if n_value != 1:
+        raise ValueError("GEMV requires N=1")
     if not dimensions_fit_hardware(m_value, k_value, n_value):
         a_words, b_words, c_words = bram_word_counts(
             m_value, k_value, n_value
@@ -313,20 +185,20 @@ def build_request_packet(a_matrix, b_matrix):
     packet = bytearray([k_value, m_value, n_value])
 
     # A BRAM address = m_block*K + k.
-    for m_block in range(math.ceil(m_value / LANES_PER_WORD)):
+    for m_block in range(math.ceil(m_value / A_LANES_PER_WORD)):
         for k_index in range(k_value):
-            for lane in range(LANES_PER_WORD):
-                row = m_block * LANES_PER_WORD + lane
-                value = a_matrix[row][k_index] if row < m_value else 0.0
-                packet.extend(pack_fp32(value))
+            for lane in range(A_LANES_PER_WORD):
+                row = m_block * A_LANES_PER_WORD + lane
+                value = a_matrix[row][k_index] if row < m_value else 0
+                packet.extend(pack_int8(value))
 
     # B BRAM address = n_block*K + k.
     for n_block in range(math.ceil(n_value / LANES_PER_WORD)):
         for k_index in range(k_value):
             for lane in range(LANES_PER_WORD):
                 column = n_block * LANES_PER_WORD + lane
-                value = b_matrix[k_index][column] if column < n_value else 0.0
-                packet.extend(pack_fp32(value))
+                value = b_matrix[k_index][column] if column < n_value else 0
+                packet.extend(pack_int8(value))
 
     return bytes(packet), m_value, k_value, n_value
 
@@ -334,6 +206,10 @@ def build_request_packet(a_matrix, b_matrix):
 def expected_response_size(m_value, n_value):
     c_word_count = m_value * math.ceil(n_value / LANES_PER_WORD)
     return c_word_count * LANES_PER_WORD * 4
+
+
+def expected_uart_response_size(m_value, n_value):
+    return expected_response_size(m_value, n_value) + 4
 
 
 def read_exact(ser, byte_count, timeout_sec):
@@ -346,7 +222,7 @@ def read_exact(ser, byte_count, timeout_sec):
     return bytes(result)
 
 
-def unpack_c_matrix_bits(received, m_value, n_value):
+def unpack_c_matrix(received, m_value, n_value):
     n_blocks = math.ceil(n_value / LANES_PER_WORD)
     expected_bytes = expected_response_size(m_value, n_value)
     if len(received) != expected_bytes:
@@ -354,7 +230,7 @@ def unpack_c_matrix_bits(received, m_value, n_value):
             f"Expected {expected_bytes} result bytes, received {len(received)}"
         )
 
-    flat_bits = struct.unpack(f"<{expected_bytes // 4}I", received)
+    flat_bits = struct.unpack(f"<{expected_bytes // 4}i", received)
     c_bits = [
         [0x00000000 for _ in range(n_value)]
         for _ in range(m_value)
@@ -370,56 +246,22 @@ def unpack_c_matrix_bits(received, m_value, n_value):
                 value_index += 1
                 if column < n_value:
                     c_bits[row][column] = value_bits
+                elif value_bits != 0:
+                    raise ValueError("Nonzero padding in C response")
     return c_bits
 
 
-def ordered_float32_bits(bits):
-    """Map binary32 bits to a monotonic integer for ULP distance."""
-    if bits & 0x80000000:
-        return 0x80000000 - (bits & 0x7FFFFFFF)
-    return 0x80000000 + bits
-
-
-def ulp_distance(a_bits, b_bits):
-    a_exponent = (a_bits >> 23) & 0xFF
-    b_exponent = (b_bits >> 23) & 0xFF
-    a_fraction = a_bits & 0x7FFFFF
-    b_fraction = b_bits & 0x7FFFFF
-
-    if (a_exponent == 0xFF and a_fraction != 0) or (
-        b_exponent == 0xFF and b_fraction != 0
-    ):
-        return None
-    return abs(ordered_float32_bits(a_bits) - ordered_float32_bits(b_bits))
-
-
-def compare_result_bits(actual_bits, expected_bits, max_ulp):
-    mismatches = []
-    maximum_observed_ulp = 0
-    for row in range(len(expected_bits)):
-        for column in range(len(expected_bits[0])):
-            distance = ulp_distance(
-                actual_bits[row][column], expected_bits[row][column]
-            )
-            if distance is None or distance > max_ulp:
-                mismatches.append(
-                    (
-                        row,
-                        column,
-                        actual_bits[row][column],
-                        expected_bits[row][column],
-                        distance,
-                    )
-                )
-            elif distance > maximum_observed_ulp:
-                maximum_observed_ulp = distance
-    return mismatches, maximum_observed_ulp
+def compare_results(actual, expected):
+    return [(row, column, actual[row][column], value)
+            for row, values in enumerate(expected)
+            for column, value in enumerate(values)
+            if actual[row][column] != value]
 
 
 def print_matrix(name, matrix):
     print(f"{name} =")
     for row in matrix:
-        print("  " + " ".join(f"{value:12.6f}" for value in row))
+        print("  " + " ".join(f"{value:12d}" for value in row))
     print()
 
 
@@ -431,7 +273,7 @@ def print_matrix_preview(name, matrix, rows=4, columns=8):
         print(
             "  "
             + " ".join(
-                f"{matrix[row][column]:12.6f}"
+                f"{matrix[row][column]:12d}"
                 for column in range(shown_columns)
             )
         )
@@ -443,7 +285,6 @@ def run_gemm_test(
     a_matrix,
     b_matrix,
     seed,
-    max_ulp,
     print_all_matrices,
     test_name,
     wait_for_button=True,
@@ -452,24 +293,24 @@ def run_gemm_test(
         a_matrix, b_matrix
     )
     response_size = expected_response_size(m_value, n_value)
+    uart_response_size = expected_uart_response_size(m_value, n_value)
     a_words, b_words, c_words = bram_word_counts(m_value, k_value, n_value)
 
-    print("Computing bit-accurate FP32 FMA Golden result...")
-    golden_bits = hardware_gemm_golden_bits(a_matrix, b_matrix)
-    golden_matrix = bits_matrix_to_float(golden_bits)
+    print("Computing exact INT8 / INT32 Golden result...")
+    golden_matrix = hardware_gemm_golden(a_matrix, b_matrix)
 
     print("=" * 72)
-    print(f"{test_name}: TPU UART FP32 GEMV test")
+    print(f"{test_name}: TPU UART INT8 GEMV test")
     print("=" * 72)
     print(f"Port              : {port_name}")
     print(f"Baud rate         : {BAUD_RATE}")
     print(f"Random seed       : {seed}")
     print(f"Dimensions        : M={m_value}, K={k_value}, N={n_value}")
-    print(f"TPU FMA count     : {m_value * k_value * n_value}")
+    print(f"TPU MAC count     : {m_value * k_value * n_value}")
     print(f"BRAM words        : A={a_words}, B={b_words}, C={c_words}")
     print(f"Request bytes     : {len(packet)}")
-    print(f"Expected RX bytes : {response_size}")
-    print(f"Allowed error     : {max_ulp} ULP")
+    print(f"Expected RX bytes : {uart_response_size}")
+    print("Comparison        : exact signed INT32 equality")
     print()
 
     if print_all_matrices or max(m_value, k_value, n_value) <= 16:
@@ -501,7 +342,7 @@ def run_gemm_test(
                 return False
 
             print("Waiting for matrix C...")
-            received = read_exact(ser, response_size, RESULT_TIMEOUT_SEC)
+            received = read_exact(ser, uart_response_size, RESULT_TIMEOUT_SEC)
 
     except (
         serial.SerialException,
@@ -511,20 +352,24 @@ def run_gemm_test(
         print(f"FAIL: serial error: {error}")
         return False
 
-    if len(received) != response_size:
+    if len(received) != uart_response_size:
         print(
-            f"FAIL: received {len(received)} of {response_size} expected bytes."
+            f"FAIL: received {len(received)} of {uart_response_size} expected bytes."
         )
         if received:
             print(f"Partial RX: {received[:64].hex(' ')}")
         print("Check BTN1, selected UART port, baud rate, reset and bitstream.")
         return False
 
-    actual_bits = unpack_c_matrix_bits(received, m_value, n_value)
-    actual_matrix = bits_matrix_to_float(actual_bits)
-    mismatches, maximum_observed_ulp = compare_result_bits(
-        actual_bits, golden_bits, max_ulp
-    )
+    c_payload = received[:response_size]
+    execution_cycles = struct.unpack("<I", received[response_size:])[0]
+
+    try:
+        actual_matrix = unpack_c_matrix(c_payload, m_value, n_value)
+    except ValueError as error:
+        print(f"FAIL: {error}")
+        return False
+    mismatches = compare_results(actual_matrix, golden_matrix)
 
     if print_all_matrices or max(m_value, n_value) <= 16:
         print_matrix("FPGA C", actual_matrix)
@@ -533,16 +378,12 @@ def run_gemm_test(
         print_matrix_preview("FPGA C", actual_matrix)
         print_matrix_preview("Hardware-rule Golden C", golden_matrix)
 
+    print(f"Execution cycles  : {execution_cycles}")
+
     if mismatches:
-        print(f"FAIL: {len(mismatches)} matrix element(s) exceeded tolerance.")
-        for row, column, actual, expected, distance in mismatches[:20]:
-            distance_text = "NaN" if distance is None else str(distance)
-            print(
-                f"  C[{row}][{column}]: "
-                f"FPGA={bits_to_float32(actual):.9g} (0x{actual:08X}), "
-                f"Golden={bits_to_float32(expected):.9g} "
-                f"(0x{expected:08X}), ULP={distance_text}"
-            )
+        print(f"FAIL: {len(mismatches)} matrix element(s) differ.")
+        for row, column, actual, expected in mismatches[:20]:
+            print(f"  C[{row}][{column}]: FPGA={actual}, Golden={expected}")
         return False
 
     # print("PASS: UART -> BRAM -> TPU -> BRAM -> UART random GEMM passed.")
@@ -561,7 +402,7 @@ def run_gemm_test(
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description=(
-            "Generate fixed-size register/BRAM-valid FP32 GEMV cases and test the "
+            "Generate fixed-size register/BRAM-valid INT8 GEMV cases and test the "
             "Arty A7 TPU through UART."
         )
     )
@@ -573,12 +414,6 @@ def parse_arguments():
         "--seed",
         type=int,
         help="Random seed for matrix/vector values; omit to generate a new seed",
-    )
-    parser.add_argument(
-        "--max-ulp",
-        type=int,
-        default=DEFAULT_MAX_ULP,
-        help=f"Allowed FP32 ULP difference (default: {DEFAULT_MAX_ULP})",
     )
     parser.add_argument(
         "--print-matrices",
@@ -595,9 +430,6 @@ def parse_arguments():
 
 def main():
     args = parse_arguments()
-    if args.max_ulp < 0:
-        print("--max-ulp must not be negative.")
-        sys.exit(1)
 
     seed = args.seed if args.seed is not None else secrets.randbits(64)
     generator = random.Random(seed)
@@ -639,7 +471,6 @@ def main():
             a_matrix,
             b_matrix,
             seed,
-            args.max_ulp,
             args.print_matrices,
             test_name,
             wait_for_button=not args.no_button_wait,

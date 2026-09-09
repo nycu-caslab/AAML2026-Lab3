@@ -47,7 +47,8 @@ if {[llength $rtl_files] == 0} {
     error "No Verilog files found in: $rtl_dir"
 }
 
-set ip_files [glob -nocomplain [file join $ip_dir * *.xci]]
+# Memories are inferred from board_bram.v; arithmetic is ordinary RTL.
+set ip_files [list [file join $ip_dir clk_wiz_0 clk_wiz_0.xci]]
 
 if {[llength $ip_files] == 0} {
     error "No XCI files found in: $ip_dir"

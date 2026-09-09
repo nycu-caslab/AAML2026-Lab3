@@ -6,7 +6,7 @@
 
 
 module PATTERN #(
-    parameter A_WIDTH = 4,
+    parameter A_WIDTH = 8,
     parameter B_WIDTH = 8
 )(
     clk,
@@ -423,7 +423,6 @@ end endtask
 
 
 endmodule
-
 
 
 
