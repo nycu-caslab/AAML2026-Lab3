@@ -42,6 +42,23 @@ integer expected_b_reads;
 integer max_cycles;
 integer computation_started;
 
+localparam RS_SEED  = 0;
+localparam RS_SHIFT = 1;
+
+integer rs_out_row;
+integer rs_kernel_row_tile;
+integer rs_output_tile;
+integer rs_phase;
+integer rs_seed_col;
+integer rs_kernel_col;
+integer rs_rows_completed;
+integer rs_a_done;
+integer rs_valid_lanes;
+integer rs_output_col_base;
+integer rs_expected_a_index;
+integer rs_expected_b_index;
+integer rs_expected_c_index;
+
 reg [7:0] M_golden, N_golden;
 reg [127:0] GOLDEN [0:65535];
 
@@ -63,7 +80,7 @@ global_buffer_bram #(.ADDR_BITS(16), .DATA_BITS(128)) gbuff_C(
     .data_in(C_data_in), .data_out(C_data_out)
 );
 
-// Interface safety checks remain active throughout computation.
+// Bram access checks
 always @(negedge clk) begin
     if (rst_n && !busy) begin
         if (A_ram_en !== 1'b0 || B_ram_en !== 1'b0 || C_ram_en !== 1'b0 || C_wr_en !== 1'b0) begin
@@ -72,6 +89,13 @@ always @(negedge clk) begin
         end
     end
     if (rst_n && busy) begin
+        if ((A_ram_en !== 1'b0 && A_ram_en !== 1'b1) ||
+            (B_ram_en !== 1'b0 && B_ram_en !== 1'b1) ||
+            (C_ram_en !== 1'b0 && C_ram_en !== 1'b1) ||
+            (C_wr_en !== 1'b0 && C_wr_en !== 1'b1)) begin
+            $display("FAIL: BRAM control signals must be 0 or 1 while TPU is busy");
+            wrong_ans;
+        end
         if (A_ram_en && (A_index + 3) >= M_golden * (M_golden + 3)) begin
             $display("FAIL: out-of-range input read A_index=%0d", A_index);
             wrong_ans;
@@ -81,14 +105,35 @@ always @(negedge clk) begin
             wrong_ans;
         end
         if (A_ram_en) begin
+            if (^A_index === 1'bx || b_read_count != expected_b_reads || rs_a_done ||
+                (rs_out_row > 0 && c_write_count < rs_out_row * ((M_golden - N_golden + 4) / 4)))
+                rs_wrong_ans;
+
+            rs_output_col_base = rs_output_tile * 4;
+            if ((M_golden - N_golden + 1 - rs_output_col_base) >= 4)
+                rs_valid_lanes = 4;
+            else
+                rs_valid_lanes = M_golden - N_golden + 1 - rs_output_col_base;
+
+            if (rs_phase == RS_SEED)
+                rs_expected_a_index = (rs_output_col_base + rs_seed_col) * (M_golden + 3) + rs_out_row + rs_kernel_row_tile * 4;
+            else
+                rs_expected_a_index = (rs_output_col_base + rs_valid_lanes - 1 + rs_kernel_col) * (M_golden + 3) + rs_out_row + rs_kernel_row_tile * 4;
+
+            if (A_index !== rs_expected_a_index[15:0]) begin
+                rs_wrong_ans;
+            end
+
             a_read_count = a_read_count + 1;
             computation_started = 1;
+            advance_rs_a;
         end
         if (B_ram_en) begin
-            if (computation_started) begin
-                $display("FAIL: B BRAM read after input streaming started");
-                wrong_ans;
-            end
+            if (^B_index === 1'bx || computation_started)
+                rs_wrong_ans;
+            rs_expected_b_index = b_read_count;
+            if (B_index !== rs_expected_b_index[15:0])
+                rs_wrong_ans;
             b_read_count = b_read_count + 1;
         end
         if (C_wr_en && !C_ram_en) begin
@@ -96,10 +141,18 @@ always @(negedge clk) begin
             wrong_ans;
         end
         if (C_ram_en && C_wr_en) begin
+            if (^C_index === 1'bx || ^C_data_in === 1'bx) begin
+                $display("FAIL: C write address or data is invalid");
+                wrong_ans;
+            end
             if (C_index >= expected_c_words) begin
                 $display("FAIL: out-of-range output write C_index=%0d", C_index);
                 wrong_ans;
             end
+            rs_expected_c_index = c_write_count;
+            if (C_index !== rs_expected_c_index[15:0] ||
+                (C_index / ((M_golden - N_golden + 4) / 4)) >= rs_rows_completed)
+                rs_wrong_ans;
             c_write_count = c_write_count + 1;
         end
     end
@@ -136,6 +189,7 @@ initial begin
         a_read_count = 0;
         b_read_count = 0;
         computation_started = 0;
+        reset_rs_checker;
         in_valid = 1'b1;
         M = M_golden;
         N = N_golden;
@@ -169,6 +223,7 @@ task reset_task; begin
         $display("                        Reset failed!                           ");
         $display("         Output signal should be 0 after initial RESET at %8t   ", $time);
         $display("----------------------------------------------------------------");
+        wrong_ans;
     end
     #(`CYCLE_TIME); rst_n = 1'b1;
     release clk;
@@ -193,6 +248,71 @@ task validate_config; begin
                  M_golden, N_golden);
         wrong_ans;
     end
+end endtask
+
+task reset_rs_checker; begin
+    rs_out_row = 0;
+    rs_kernel_row_tile = 0;
+    rs_output_tile = 0;
+    rs_phase = RS_SEED;
+    rs_seed_col = 0;
+    rs_kernel_col = 1;
+    rs_rows_completed = 0;
+    rs_a_done = 0;
+    rs_valid_lanes = 0;
+    rs_output_col_base = 0;
+    rs_expected_a_index = 0;
+    rs_expected_b_index = 0;
+    rs_expected_c_index = 0;
+end endtask
+
+task advance_rs_a; begin
+    if (rs_phase == RS_SEED) begin
+        if (rs_seed_col + 1 < rs_valid_lanes) begin
+            rs_seed_col = rs_seed_col + 1;
+        end
+        else if (N_golden > 1) begin
+            rs_phase = RS_SHIFT;
+            rs_kernel_col = 1;
+        end
+        else begin
+            advance_rs_tile;
+        end
+    end
+    else begin
+        if (rs_kernel_col + 1 < N_golden)
+            rs_kernel_col = rs_kernel_col + 1;
+        else
+            advance_rs_tile;
+    end
+end endtask
+
+task advance_rs_tile; begin
+    rs_phase = RS_SEED;
+    rs_seed_col = 0;
+    rs_kernel_col = 1;
+    if (rs_output_tile + 1 < ((M_golden - N_golden + 4) / 4)) begin
+        rs_output_tile = rs_output_tile + 1;
+    end
+    else begin
+        rs_output_tile = 0;
+        if (rs_kernel_row_tile + 1 < ((N_golden + 3) / 4)) begin
+            rs_kernel_row_tile = rs_kernel_row_tile + 1;
+        end
+        else begin
+            rs_kernel_row_tile = 0;
+            rs_rows_completed = rs_rows_completed + 1;
+            if (rs_out_row + 1 < (M_golden - N_golden + 1))
+                rs_out_row = rs_out_row + 1;
+            else
+                rs_a_done = 1;
+        end
+    end
+end endtask
+
+task rs_wrong_ans; begin
+    $display("FAIL: design does not follow the required row-stationary dataflow");
+    wrong_ans;
 end endtask
 
 task read_input_sram; begin
@@ -260,14 +380,13 @@ task golden_check; begin
         error_count = error_count + 1;
     end
     if (a_read_count !== expected_a_reads) begin
-        $display("FAIL pattern %0d: A read count=%0d, expected=%0d",
-                 patcount, a_read_count, expected_a_reads);
-        error_count = error_count + 1;
+        rs_wrong_ans;
     end
     if (b_read_count !== expected_b_reads) begin
-        $display("FAIL pattern %0d: B read count=%0d, expected=%0d",
-                 patcount, b_read_count, expected_b_reads);
-        error_count = error_count + 1;
+        rs_wrong_ans;
+    end
+    if (!rs_a_done || rs_rows_completed != (M_golden - N_golden + 1)) begin
+        rs_wrong_ans;
     end
     for (index = 0; index < expected_c_words; index = index + 1) begin
         if (gbuff_C.gbuff[index] !== GOLDEN[index]) begin

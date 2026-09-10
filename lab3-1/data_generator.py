@@ -17,13 +17,7 @@ def case_shapes(mode, count, rng):
     }
     if mode in directed:
         return [directed[mode][i % len(directed[mode])] for i in range(count)]
-    
-    # large_cases = [(64, 17), (96, 33), (128, 65), (192, 65),
-    #                (254, 63), (254, 95), (254, 127), (254, 159),
-    #                (254, 191), (254, 223), (254, 249), (254, 254)] will be too large
-    # large_cases = [(64, 17), (64, 33), (64, 47), (96, 65),
-    #                 (254, 33), (254, 65), (32, 17), (32, 5), 
-    #                 (32, 13), (96, 33), (96, 17), (48, 17)]
+
     large_cases = [(64, 17), (64, 33), (64, 47), (96, 65)]
     shapes = large_cases[:count]
     for _ in range(len(shapes), count):
