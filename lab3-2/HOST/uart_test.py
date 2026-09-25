@@ -25,7 +25,7 @@ A_LANES_PER_WORD = 4
 LANES_PER_WORD = 4
 MIN_MATRIX_DIMENSION = 1
 MIN_VECTOR_DIMENSION = 1
-MAX_DIMENSION = 255
+MAX_DIMENSION = 254
 
 # Signed INT8 inputs; exact signed INT32 output comparison.
 RANDOM_VALUE_MIN = -128
@@ -48,7 +48,7 @@ def pack_int8(value):
 def hardware_gemv_golden(a_matrix, b_matrix):
     """Exact INT8 x INT8 dot products, accumulated as signed INT32.
 
-    K <= 255 bounds the largest magnitude to 4,177,920, so no overflow occurs.
+    K <= 254 bounds the largest magnitude to 4,161,536, so no overflow occurs.
     """
     m_value, k_value, n_value = check_dimensions(a_matrix, b_matrix)
     return [

@@ -120,6 +120,10 @@ wire                  clear_C_active;
 wire                  bram_C_wr_en;
 wire [memory_bits-1:0] bram_C_write_index;
 wire [127:0]          bram_C_data_in;
+wire                  tpu_C_access;
+wire                  bram_C_read_en;
+wire [memory_bits-1:0] bram_C_read_index;
+wire [127:0]          bram_C_data_out;
 
 // Bram store the initial data
 // read, 1 cycle latency
@@ -171,7 +175,12 @@ board_bram #(.DATA_WIDTH(32), .DEPTH(memory_depth)) u_bram_B (
     .doutb (B_data_out)
 );
 
-assign C_data_out = 128'd0;
+assign tpu_C_access = (top_state == S_RUN);
+assign C_data_out = bram_C_data_out;
+assign uart_C_data_out = bram_C_data_out;
+assign bram_C_read_en = tpu_C_access ? (C_ram_en && !C_wr_en) :
+                                                    (top_state == S_SEND_UART);
+assign bram_C_read_index = tpu_C_access ? C_index : uart_C_index;
 assign clear_C_active = (top_state == S_CLEAR_C);
 assign bram_C_wr_en = clear_C_active ? 1'b1 : C_wr_en;
 assign bram_C_write_index = clear_C_active ? clear_C_index : C_index[memory_bits-1:0];
@@ -181,16 +190,16 @@ assign tpu_rst_n = rst_n & ~clear_C_active;
 board_bram #(.DATA_WIDTH(128), .DEPTH(memory_depth)) u_bram_C (
     // Port A: TPU writes C
     .clka  (clk),
-    .ena   (clear_C_active || C_ram_en),
+    .ena   (clear_C_active || (tpu_C_access && C_ram_en)),
     .wea   (bram_C_wr_en),
     .addra (bram_C_write_index),
     .dina  (bram_C_data_in),
 
-    // Port B: UART reads C
+    // Port B: TPU reads during computation; UART reads after completion.
     .clkb  (clk),
-    .enb   (1'b1),
-    .addrb (uart_C_index),
-    .doutb (uart_C_data_out)
+    .enb   (bram_C_read_en),
+    .addrb (bram_C_read_index),
+    .doutb (bram_C_data_out)
 );
 
 // UART module
